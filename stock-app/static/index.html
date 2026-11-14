@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Phân tích cổ phiếu</title>
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#0f5fff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Cổ phiếu">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f3f5f7;--panel:#ffffff;--ink:#101820;--mute:#5d6b78;--line:#dde3e8;--accent:#0f5fff;
+  --up:#0a9b4b;--down:#d92d3a;--ref:#c78a00;--sma5:#0f5fff;--sma20:#9b59d0;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#0b1218;--panel:#121b23;--ink:#e8eef3;--mute:#8a9aa8;--line:#243340;--accent:#5b92ff;
+  --up:#2fd47a;--down:#ff5c66;--ref:#f0b429;--sma5:#5b92ff;--sma20:#c58cf2;color-scheme:dark}
+}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 "Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
+.wrap{max-width:860px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:20px;margin:0 0 14px;font-weight:700}
+form{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+input,select,button{font:inherit;color:inherit}
+input[type=text]{flex:1 1 140px;min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);text-transform:uppercase;font-size:16px}
+select{padding:11px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+button{padding:11px 18px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-weight:700;cursor:pointer}
+button:disabled{opacity:.6;cursor:default}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.auto{display:flex;gap:6px;align-items:center;color:var(--mute);font-size:13px;margin-top:10px}
+.notice{margin-top:14px;font-size:13px;color:var(--mute);border-left:3px solid var(--ref);padding:4px 10px}
+section{margin-top:28px}
+h2{font-size:16px;margin:0 0 10px;font-weight:700}
+.hero .name{color:var(--mute);margin:0}
+.hero .price{font-size:44px;font-weight:700;line-height:1.1;margin:4px 0 0;letter-spacing:-.01em}
+.hero .chg{font-size:18px;font-weight:500;margin:2px 0 0}
+.up{color:var(--up)}.down{color:var(--down)}.flat{color:var(--ref)}
+.meta{color:var(--mute);font-size:13px;margin-top:6px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px 20px;margin-top:16px}
+.stats dt{color:var(--mute);font-size:13px}
+.stats dd{margin:0;font-weight:500;font-size:16px}
+.chartbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;overflow-x:auto}
+.chartbox svg{display:block;width:100%;min-width:480px;height:auto}
+.legend{display:flex;gap:16px;font-size:13px;color:var(--mute);margin-top:8px;flex-wrap:wrap}
+.legend i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
+.news{list-style:none;margin:0;padding:0}
+.news li{padding:12px 0;border-top:1px solid var(--line)}
+.news li:first-child{border-top:0;padding-top:0}
+.news a{color:var(--ink);font-weight:500;text-decoration:none}
+.news a:hover{text-decoration:underline}
+.news p{margin:4px 0 0;color:var(--mute);font-size:14px}
+.news small{color:var(--mute)}
+.gauge{height:8px;border-radius:4px;background:linear-gradient(90deg,var(--down),var(--ref),var(--up));position:relative;margin:12px 0 6px}
+.gauge b{position:absolute;top:-5px;width:6px;height:18px;border-radius:3px;background:var(--ink);transform:translateX(-50%)}
+.gl{display:flex;justify-content:space-between;color:var(--mute);font-size:12px}
+.msg{margin-top:24px;color:var(--mute)}
+.err{color:var(--down)}
+.two{display:grid;gap:28px}
+@media(min-width:720px){.two{grid-template-columns:1fr 1fr}}
+@media(prefers-reduced-motion:no-preference){button{transition:opacity .15s}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Phân tích cổ phiếu</h1>
+  <form id="f">
+    <input id="sym" type="text" placeholder="Mã cổ phiếu, ví dụ VPB hoặc AAPL" maxlength="10" autocomplete="off" required aria-label="Mã cổ phiếu">
+    <select id="mk" aria-label="Thị trường">
+      <option value="auto">Tự nhận diện</option>
+      <option value="vn">Việt Nam</option>
+      <option value="us">Quốc tế</option>
+    </select>
+    <button id="go" type="submit">Xem báo cáo</button>
+  </form>
+  <label class="auto"><input type="checkbox" id="auto"> Tự làm mới mỗi 60 giây</label>
+  <p class="notice">Dữ liệu lấy từ nguồn công khai và có thể trễ vài phút. Báo cáo chỉ để tham khảo, không phải khuyến nghị mua hoặc bán.</p>
+  <div id="out" aria-live="polite"></div>
+</div>
+<script>
+(function(){
+var out=document.getElementById('out'),f=document.getElementById('f'),sym=document.getElementById('sym'),
+    mk=document.getElementById('mk'),go=document.getElementById('go'),auto=document.getElementById('auto'),timer=null;
+
+function h(tag,attrs){
+  var e=document.createElement(tag);
+  if(attrs)for(var k in attrs){if(k==='class')e.className=attrs[k];else if(k==='text')e.textContent=attrs[k];else e.setAttribute(k,attrs[k]);}
+  for(var i=2;i<arguments.length;i++){var c=arguments[i];if(c==null)continue;e.appendChild(typeof c==='string'?document.createTextNode(c):c);}
+  return e;
+}
+function num(v,d){return v==null||isNaN(v)?'—':Number(v).toLocaleString('vi-VN',{minimumFractionDigits:d||0,maximumFractionDigits:d||0});}
+function money(v,cur){
+  if(v==null)return '—';
+  return cur==='VND'?num(v,0)+' ₫':num(v,2)+' '+cur;
+}
+function big(v,cur){
+  if(v==null)return '—';
+  if(cur==='VND'){
+    if(v>=1e12)return num(v/1e12,1)+' nghìn tỷ ₫';
+    return num(v/1e9,0)+' tỷ ₫';
+  }
+  if(v>=1e12)return num(v/1e12,2)+' nghìn tỷ '+cur;
+  if(v>=1e9)return num(v/1e9,2)+' tỷ '+cur;
+  return num(v/1e6,0)+' triệu '+cur;
+}
+function dir(v){return v>0?'up':v<0?'down':'flat';}
+function safeUrl(u){return /^https?:\/\//i.test(u||'')?u:'#';}
+function ago(iso){
+  if(!iso)return '';
+  var m=Math.round((Date.now()-new Date(iso).getTime())/60000);
+  if(m<1)return 'vừa xong';if(m<60)return m+' phút trước';
+  return Math.round(m/60)+' giờ trước';
+}
+
+function chartSvg(data,cur){
+  var W=760,H=280,pl=8,pr=64,pt=12,pb=26,n=data.length;
+  var vals=[];data.forEach(function(d){[d.close,d.sma5,d.sma20].forEach(function(x){if(x!=null)vals.push(x)})});
+  var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals),pad=(mx-mn)*0.06||1;mn-=pad;mx+=pad;
+  function X(i){return pl+i*(W-pl-pr)/(n-1)}
+  function Y(v){return pt+(mx-v)/(mx-mn)*(H-pt-pb)}
+  function path(key){var s='',on=false;data.forEach(function(d,i){var v=d[key];if(v==null){on=false;return}s+=(on?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)+' ';on=true});return s}
+  var NS='http://www.w3.org/2000/svg';
+  var svg=document.createElementNS(NS,'svg');svg.setAttribute('viewBox','0 0 '+W+' '+H);svg.setAttribute('role','img');
+  svg.setAttribute('aria-label','Biểu đồ giá đóng cửa 60 phiên gần nhất cùng đường trung bình 5 và 20 phiên');
+  function el(t,a){var e=document.createElementNS(NS,t);for(var k in a)e.setAttribute(k,a[k]);return e}
+  for(var g=0;g<=3;g++){
+    var v=mn+(mx-mn)*g/3,y=Y(v);
+    svg.appendChild(el('line',{x1:pl,x2:W-pr,y1:y,y2:y,stroke:'var(--line)','stroke-width':1}));
+    var t=el('text',{x:W-pr+6,y:y+4,fill:'var(--mute)','font-size':11});
+    t.textContent=cur==='VND'?num(v/1000,1)+'k':num(v,2);svg.appendChild(t);
+  }
+  svg.appendChild(el('path',{d:path('sma20'),fill:'none',stroke:'var(--sma20)','stroke-width':1.6}));
+  svg.appendChild(el('path',{d:path('sma5'),fill:'none',stroke:'var(--sma5)','stroke-width':1.6,'stroke-dasharray':'4 3'}));
+  svg.appendChild(el('path',{d:path('close'),fill:'none',stroke:'var(--ink)','stroke-width':2.2,'stroke-linejoin':'round'}));
+  var lx=X(n-1),ly=Y(data[n-1].close);
+  svg.appendChild(el('circle',{cx:lx,cy:ly,r:4,fill:'var(--ink)'}));
+  [[0,'start'],[n-1,'end']].forEach(function(p){
+    var t=el('text',{x:p[1]==='end'?X(p[0]):X(p[0])+2,y:H-6,fill:'var(--mute)','font-size':11,'text-anchor':p[1]});
+    t.textContent=data[p[0]].date.slice(5).split('-').reverse().join('/');svg.appendChild(t);
+  });
+  return svg;
+}
+
+function render(r){
+  out.textContent='';
+  var cls=dir(r.change),sign=r.change>0?'+':'';
+  var hero=h('section',{class:'hero'},
+    h('p',{class:'name',text:r.symbol+' · '+r.name}),
+    h('p',{class:'price',text:money(r.price,r.currency)}),
+    h('p',{class:'chg '+cls,text:sign+money(r.change,r.currency)+' ('+sign+num(r.change_pct,2)+'%) so với phiên trước'}),
+    h('p',{class:'meta',text:'Phiên giao dịch '+r.as_of+'. Lấy dữ liệu lúc '+r.fetched_at.replace('T',' ')+'.'})
+  );
+  var st=h('dl',{class:'stats'});
+  [['Cao nhất phiên',money(r.day_high,r.currency)],['Thấp nhất phiên',money(r.day_low,r.currency)],
+   ['Giá phiên trước',money(r.prev_close,r.currency)],['Khối lượng',num(r.volume,0)]].forEach(function(p){
+    st.appendChild(h('div',null,h('dt',{text:p[0]}),h('dd',{text:p[1]})));});
+  hero.appendChild(st);out.appendChild(hero);
+
+  var cs=h('section',null,h('h2',{text:'Biểu đồ kỹ thuật ngắn hạn'}));
+  var box=h('div',{class:'chartbox'});
+  if(r.chart.length>2)box.appendChild(chartSvg(r.chart,r.currency));else box.appendChild(h('p',{class:'msg',text:'Chưa đủ dữ liệu để vẽ biểu đồ.'}));
+  cs.appendChild(box);
+  var rsi=r.indicators.rsi14;
+  cs.appendChild(h('div',{class:'legend'},
+    h('span',null,h('i',{style:'background:var(--ink)'}),'Giá đóng cửa'),
+    h('span',null,h('i',{style:'background:var(--sma5)'}),'SMA5: '+money(r.indicators.sma5,r.currency)),
+    h('span',null,h('i',{style:'background:var(--sma20)'}),'SMA20: '+money(r.indicators.sma20,r.currency)),
+    h('span',{text:'RSI14: '+(rsi==null?'—':num(rsi,0))})));
+  out.appendChild(cs);
+
+  var fd=r.fundamentals,fs=h('section',null,h('h2',{text:'Chỉ số tài chính cốt lõi'}));
+  var dl=h('dl',{class:'stats'});
+  [['P/E',fd.pe==null?'—':num(fd.pe,2)],['EPS',fd.eps==null?'—':money(fd.eps,r.currency)],
+   ['Tỷ suất cổ tức',fd.dividend_yield==null?'—':num(fd.dividend_yield,2)+'%'],['Vốn hóa',big(fd.market_cap,r.currency)]].forEach(function(p){
+    dl.appendChild(h('div',null,h('dt',{text:p[0]}),h('dd',{text:p[1]})));});
+  fs.appendChild(dl);out.appendChild(fs);
+
+  var two=h('div',{class:'two'});
+  var ns=h('section',null,h('h2',{text:'3 tin đáng chú ý trong 24 giờ qua'}));
+  var ul=h('ul',{class:'news'});
+  if(!r.news.length)ul.appendChild(h('li',{class:'msg',text:'Không tìm thấy tin mới trong 24 giờ qua.'}));
+  r.news.forEach(function(n){
+    var li=h('li',null,h('a',{href:safeUrl(n.link),target:'_blank',rel:'noopener noreferrer',text:n.title}));
+    if(n.summary)li.appendChild(h('p',{text:n.summary}));
+    li.appendChild(h('small',{text:[n.source,ago(n.published)].filter(Boolean).join(', ')}));
+    ul.appendChild(li);
+  });
+  ns.appendChild(ul);two.appendChild(ns);
+
+  var sn=r.sentiment,ss=h('section',null,h('h2',{text:'Tâm lý thị trường và xu hướng ngắn hạn'}));
+  var cl=sn.label==='Tích cực'?'up':sn.label==='Tiêu cực'?'down':'flat';
+  ss.appendChild(h('p',{class:cl,style:'font-size:20px;font-weight:700;margin:0',text:sn.label+' ('+sn.score+'/100)'}));
+  var g=h('div',{class:'gauge'},h('b'));g.firstChild.style.left=sn.score+'%';ss.appendChild(g);
+  ss.appendChild(h('div',{class:'gl'},h('span',{text:'Tiêu cực'}),h('span',{text:'Tích cực'})));
+  ss.appendChild(h('p',{text:sn.trend_view}));
+  ss.appendChild(h('p',{class:'meta',text:sn.method==='claude'?'Phân tích bởi Claude dựa trên tiêu đề tin và chỉ báo kỹ thuật.':'Đánh giá theo quy tắc đơn giản (chưa bật phân tích AI).'}));
+  two.appendChild(ss);out.appendChild(two);
+}
+
+async function load(){
+  var s=sym.value.trim();if(!s)return;
+  go.disabled=true;
+  if(!out.firstChild)out.appendChild(h('p',{class:'msg',text:'Đang lấy dữ liệu '+s.toUpperCase()+'…'}));
+  try{
+    var res=await fetch('/api/report/'+encodeURIComponent(s)+'?market='+mk.value);
+    var data=await res.json();
+    if(!res.ok)throw new Error(data.detail||'Lỗi không xác định');
+    render(data);
+  }catch(e){
+    out.textContent='';out.appendChild(h('p',{class:'msg err',text:'Không tạo được báo cáo: '+e.message}));
+  }finally{go.disabled=false}
+}
+f.addEventListener('submit',function(e){e.preventDefault();out.textContent='';load();});
+auto.addEventListener('change',function(){
+  clearInterval(timer);
+  if(auto.checked)timer=setInterval(function(){if(sym.value.trim())load()},60000);
+});
+})();
+</script>
+</body>
+</html>
