@@ -3,6 +3,7 @@ services:
     name: phan-tich-co-phieu
     runtime: python
     plan: free
+    rootDir: stock-app
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
