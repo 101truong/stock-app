@@ -1,11 +1,12 @@
+
 """
 Ứng dụng báo cáo phân tích cổ phiếu.
-
+ 
 - Cổ phiếu Việt Nam: dữ liệu từ thư viện vnstock (nguồn VCI)
 - Cổ phiếu quốc tế: dữ liệu từ yfinance (Yahoo Finance)
 - Tin tức 24 giờ qua: Google News RSS
 - Tâm lý thị trường: Claude (nếu có ANTHROPIC_API_KEY), nếu không thì dùng quy tắc đơn giản
-
+ 
 Chạy: uvicorn app:app --reload
 """
 import json
@@ -17,23 +18,23 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
-
+ 
 import pandas as pd
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-
+ 
 load_dotenv()
-
+ 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "45"))
 _cache = {}
-
+ 
 app = FastAPI(title="Phân tích cổ phiếu")
-
-
+ 
+ 
 # ---------------------------------------------------------------- chỉ báo kỹ thuật
 def calc_rsi(closes, n=14):
     s = pd.Series(closes, dtype="float64")
@@ -47,13 +48,13 @@ def calc_rsi(closes, n=14):
         return 100.0
     rs = up.iloc[-1] / last_dn
     return float(100 - 100 / (1 + rs))
-
-
+ 
+ 
 def sma(closes, n):
     s = pd.Series(closes, dtype="float64").rolling(n).mean()
     return [None if math.isnan(x) else float(x) for x in s]
-
-
+ 
+ 
 def rule_trend(price, sma5, sma20, rsi_v):
     """Nhận định xu hướng ngắn hạn theo quy tắc đơn giản (dự phòng khi không có AI)."""
     pts, notes = 0.0, []
@@ -85,14 +86,14 @@ def rule_trend(price, sma5, sma20, rsi_v):
         "; " + "; ".join(notes[1:]) if len(notes) > 1 else ""
     ) + ". Chỉ mang tính tham khảo."
     return label, text
-
-
+ 
+ 
 POS_WORDS = ["tăng", "lãi", "lợi nhuận", "kỷ lục", "vượt", "tích cực", "mua ròng", "khuyến nghị mua",
              "surge", "beat", "record", "upgrade", "rally", "growth", "gain", "profit", "strong"]
 NEG_WORDS = ["giảm", "lỗ", "bán ròng", "sụt", "rủi ro", "điều tra", "phạt", "hạ", "nợ xấu",
              "plunge", "miss", "downgrade", "lawsuit", "probe", "fall", "loss", "weak", "cut"]
-
-
+ 
+ 
 def keyword_sentiment(titles):
     score = 50
     for t in titles:
@@ -102,8 +103,8 @@ def keyword_sentiment(titles):
     score = max(0, min(100, score))
     label = "Tích cực" if score >= 60 else "Tiêu cực" if score <= 40 else "Trung lập"
     return score, label
-
-
+ 
+ 
 # ---------------------------------------------------------------- dữ liệu giá
 VND_API = "https://finfo-api.vndirect.com.vn/v4"
 VND_HEADERS = {
@@ -112,14 +113,14 @@ VND_HEADERS = {
     "Referer": "https://dstock.vndirect.com.vn/",
     "Origin": "https://dstock.vndirect.com.vn",
 }
-
-
+ 
+ 
 def _vn_prices_vndirect(sym):
     r = requests.get(
         f"{VND_API}/stock_prices",
         params={"sort": "date", "size": 150, "page": 1, "q": f"code:{sym}"},
         headers=VND_HEADERS,
-        timeout=15,
+        timeout=6,
     )
     r.raise_for_status()
     rows = []
@@ -138,41 +139,52 @@ def _vn_prices_vndirect(sym):
         )
     rows.sort(key=lambda x: x["date"])
     return rows
-
-
+ 
+ 
 def _vn_prices_vci(sym):
-    payload = {
-        "timeFrame": "ONE_DAY",
-        "symbols": [sym],
-        "to": int(time.time()) + 86400,
-        "countBack": 150,
-    }
+    now = int(time.time())
     headers = dict(VND_HEADERS)
     headers["Referer"] = "https://trading.vietcap.com.vn/"
     headers["Origin"] = "https://trading.vietcap.com.vn"
-    r = requests.post(
-        "https://trading.vietcap.com.vn/api/chart/OHLCChart/gap",
-        json=payload,
-        headers=headers,
-        timeout=15,
-    )
-    r.raise_for_status()
-    d = r.json()[0]
-    rows = []
-    for t, o, h, l, c, v in zip(d["t"], d["o"], d["h"], d["l"], d["c"], d["v"]):
-        rows.append(
-            {
-                "date": datetime.fromtimestamp(int(t)).strftime("%Y-%m-%d"),
-                "close": float(c),
-                "high": float(h),
-                "low": float(l),
-                "volume": float(v),
-            }
+    headers["Content-Type"] = "application/json"
+    variants = [
+        {"timeFrame": "ONE_DAY", "symbols": [sym], "to": now, "countBack": 120},
+        {"timeFrame": "ONE_DAY", "symbols": [sym], "to": now + 86400, "countBack": 120},
+        {"timeFrame": "ONE_DAY", "symbols": [sym], "to": now, "countBack": 100},
+        {"timeFrame": "ONE_DAY", "symbols": [sym], "to": now, "countBack": 60},
+        {"timeFrame": "ONE_DAY", "symbols": [sym], "to": str(now), "countBack": 120},
+    ]
+    last = ""
+    for payload in variants:
+        r = requests.post(
+            "https://trading.vietcap.com.vn/api/chart/OHLCChart/gap",
+            json=payload,
+            headers=headers,
+            timeout=8,
         )
-    rows.sort(key=lambda x: x["date"])
-    return rows
-
-
+        if r.status_code != 200:
+            last = f"HTTP {r.status_code}: {r.text[:150]}"
+            continue
+        data = r.json()
+        d = data[0] if isinstance(data, list) and data else data
+        rows = []
+        for t, o, h, l, c, v in zip(d["t"], d["o"], d["h"], d["l"], d["c"], d["v"]):
+            rows.append(
+                {
+                    "date": datetime.fromtimestamp(int(t)).strftime("%Y-%m-%d"),
+                    "close": float(c),
+                    "high": float(h),
+                    "low": float(l),
+                    "volume": float(v),
+                }
+            )
+        rows.sort(key=lambda x: x["date"])
+        if rows:
+            return rows
+        last = "phản hồi rỗng"
+    raise RuntimeError(last or "không rõ lỗi")
+ 
+ 
 def _vn_fundamentals(sym, price):
     """Lấy P/E, EPS, cổ tức, vốn hóa từ VNDirect (khớp theo tên chỉ số)."""
     out = {"pe": None, "eps": None, "dividend_yield": None, "market_cap": None}
@@ -181,7 +193,7 @@ def _vn_fundamentals(sym, price):
             f"{VND_API}/ratios/latest",
             params={"order": "reportDate", "where": f"code:{sym}", "size": 300},
             headers=VND_HEADERS,
-            timeout=15,
+            timeout=6,
         )
         r.raise_for_status()
         for it in r.json().get("data", []):
@@ -204,8 +216,8 @@ def _vn_fundamentals(sym, price):
     except Exception:
         pass
     return out
-
-
+ 
+ 
 def _vn_prices_tcbs(sym):
     now = int(time.time())
     r = requests.get(
@@ -217,8 +229,9 @@ def _vn_prices_tcbs(sym):
             "from": now - 150 * 86400,
             "to": now + 86400,
         },
-        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-        timeout=15,
+        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json",
+                 "Origin": "https://tcinvest.tcbs.com.vn", "Referer": "https://tcinvest.tcbs.com.vn/"},
+        timeout=6,
     )
     r.raise_for_status()
     rows = []
@@ -236,13 +249,89 @@ def _vn_prices_tcbs(sym):
         )
     rows.sort(key=lambda x: x["date"])
     return rows
-
-
+ 
+ 
+FIREANT_BASE = "https://restv2.fireant.vn"
+ 
+ 
+def _fireant_headers():
+    token = os.getenv("FIREANT_TOKEN", "").strip().strip('"')
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    if not token:
+        raise RuntimeError("chưa đặt FIREANT_TOKEN")
+    return {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+ 
+ 
+def _vn_prices_fireant(sym):
+    end = datetime.now().date()
+    start = end - timedelta(days=200)
+    r = requests.get(
+        f"{FIREANT_BASE}/symbols/{sym}/historical-quotes",
+        params={"startDate": start.isoformat(), "endDate": end.isoformat(), "offset": 0, "limit": 150},
+        headers=_fireant_headers(),
+        timeout=10,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"HTTP {r.status_code}: {r.text[:120]}")
+    rows = []
+    for d in r.json():
+        close = d.get("priceClose") or d.get("close")
+        if not close:
+            continue
+        rows.append(
+            {
+                "date": str(d.get("date"))[:10],
+                "close": float(close),
+                "high": float(d.get("priceHigh") or d.get("high") or close),
+                "low": float(d.get("priceLow") or d.get("low") or close),
+                "volume": float(d.get("totalVolume") or d.get("dealVolume") or d.get("volume") or 0),
+            }
+        )
+    rows.sort(key=lambda x: x["date"])
+    return rows
+ 
+ 
+def _vn_fundamentals_fireant(sym):
+    out = {"pe": None, "eps": None, "dividend_yield": None, "market_cap": None}
+    name = None
+    try:
+        r = requests.get(
+            f"{FIREANT_BASE}/symbols/{sym}/fundamental",
+            headers=_fireant_headers(),
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return out, None
+        d = r.json()
+        name = d.get("companyName") or d.get("name")
+        for k, v in d.items():
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                continue
+            kl = k.lower()
+            if kl == "pe" and out["pe"] is None:
+                out["pe"] = float(v)
+            elif kl == "eps" and out["eps"] is None:
+                out["eps"] = float(v)
+            elif "dividend" in kl and "yield" in kl and out["dividend_yield"] is None:
+                out["dividend_yield"] = float(v)
+            elif kl == "marketcap" and out["market_cap"] is None:
+                out["market_cap"] = float(v)
+    except Exception:
+        pass
+    return out, name
+ 
+ 
 def fetch_vn(sym):
     rows, errors = [], []
     for name, getter in (
-        ("VNDirect", _vn_prices_vndirect),
+        ("FireAnt", _vn_prices_fireant),
         ("VCI", _vn_prices_vci),
+        ("VNDirect", _vn_prices_vndirect),
         ("TCBS", _vn_prices_tcbs),
     ):
         try:
@@ -262,13 +351,16 @@ def fetch_vn(sym):
         for r in rows:
             for k in ("close", "high", "low"):
                 r[k] *= 1000
-    fund = _vn_fundamentals(sym, rows[-1]["close"])
-    return {"rows": rows, "fund": fund, "name": sym, "currency": "VND"}
-
-
+    price = rows[-1]["close"]
+    fund, name = _vn_fundamentals_fireant(sym)
+    if not any(v is not None for v in fund.values()):
+        fund = _vn_fundamentals(sym, price)
+    return {"rows": rows, "fund": fund, "name": name or sym, "currency": "VND"}
+ 
+ 
 def fetch_us(sym):
     import yfinance as yf
-
+ 
     t = yf.Ticker(sym)
     df = t.history(period="6mo", interval="1d")
     if df is None or df.empty:
@@ -301,8 +393,8 @@ def fetch_us(sym):
         "name": info.get("longName") or info.get("shortName") or sym,
         "currency": info.get("currency", "USD"),
     }
-
-
+ 
+ 
 # ---------------------------------------------------------------- tin tức
 def fetch_news(sym, market):
     if market == "vn":
@@ -344,8 +436,8 @@ def fetch_news(sym, market):
         if len(items) >= 15:
             break
     return items
-
-
+ 
+ 
 # ---------------------------------------------------------------- phân tích bằng Claude
 def llm_analyze(sym, name, news, tech):
     key = os.getenv("ANTHROPIC_API_KEY")
@@ -353,23 +445,23 @@ def llm_analyze(sym, name, news, tech):
         return None
     try:
         import anthropic
-
+ 
         client = anthropic.Anthropic(api_key=key)
         headlines = "\n".join(
             f"{i}. {n['title']} (nguồn: {n['source'] or 'không rõ'})" for i, n in enumerate(news)
         )
         prompt = f"""Bạn là chuyên viên phân tích chứng khoán. Mã: {sym} ({name}).
 Chỉ báo kỹ thuật hiện tại: {json.dumps(tech, ensure_ascii=False)}
-
+ 
 Các tiêu đề tin trong 24 giờ qua:
 {headlines}
-
+ 
 Nhiệm vụ:
 1. Chọn đúng 3 tin quan trọng nhất ảnh hưởng đến giá mã này (bỏ tin trùng lặp hoặc không liên quan trực tiếp).
 2. Với mỗi tin, viết 1 câu tóm tắt tác động bằng lời của bạn. Chỉ dựa trên tiêu đề, không suy diễn chi tiết không có trong tiêu đề.
 3. Đánh giá tâm lý thị trường từ 0 (rất tiêu cực) đến 100 (rất tích cực).
 4. Viết nhận định xu hướng ngắn hạn 2-3 câu, kết hợp tin tức và chỉ báo kỹ thuật, nêu rõ chỉ mang tính tham khảo.
-
+ 
 Chỉ trả về JSON thuần, đúng dạng:
 {{"top": [{{"index": 0, "summary": "..."}}, ...], "sentiment_score": 55, "sentiment_label": "Tích cực|Trung lập|Tiêu cực", "trend_view": "..."}}"""
         msg = client.messages.create(
@@ -393,8 +485,8 @@ Chỉ trả về JSON thuần, đúng dạng:
         }
     except Exception:
         return None
-
-
+ 
+ 
 # ---------------------------------------------------------------- API
 def build_report(sym, market):
     data = fetch_vn(sym) if market == "vn" else fetch_us(sym)
@@ -405,7 +497,7 @@ def build_report(sym, market):
     last = rows[-1]
     prev_close = rows[-2]["close"] if len(rows) > 1 else last["close"]
     change = last["close"] - prev_close
-
+ 
     tech = {
         "gia_dong_cua": last["close"],
         "sma5": s5[-1],
@@ -422,7 +514,7 @@ def build_report(sym, market):
         score, label = keyword_sentiment([n["title"] for n in news])
         _, view = rule_trend(last["close"], s5[-1], s20[-1], rsi_v)
         method = "quy-tac"
-
+ 
     n_chart = 60
     chart = [
         {"date": r["date"], "close": r["close"], "sma5": a, "sma20": b}
@@ -448,8 +540,8 @@ def build_report(sym, market):
         "news": news,
         "sentiment": {"score": score, "label": label, "trend_view": view, "method": method},
     }
-
-
+ 
+ 
 @app.get("/api/report/{symbol}")
 def report(symbol: str, market: str = "auto"):
     sym = symbol.strip().upper()
@@ -459,7 +551,7 @@ def report(symbol: str, market: str = "auto"):
         raise HTTPException(400, "market phải là auto, vn hoặc us")
     if market == "auto":
         market = "vn" if re.fullmatch(r"[A-Z]{3}", sym) else "us"
-
+ 
     key = (sym, market)
     hit = _cache.get(key)
     if hit and time.time() - hit[0] < CACHE_TTL:
@@ -472,11 +564,12 @@ def report(symbol: str, market: str = "auto"):
         raise HTTPException(502, f"Không lấy được dữ liệu từ nguồn: {e}")
     _cache[key] = (time.time(), result)
     return result
-
-
+ 
+ 
 @app.get("/")
 def index():
     return FileResponse(os.path.join(BASE_DIR, "static", "index.html"))
-
-
+ 
+ 
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+ 
