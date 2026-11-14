@@ -105,73 +105,125 @@ def keyword_sentiment(titles):
 
 
 # ---------------------------------------------------------------- dữ liệu giá
-def _pick(row, keywords, exclude=()):
-    for col, val in row.items():
-        name = str(col).lower()
-        if any(k in name for k in keywords) and not any(x in name for x in exclude):
-            try:
-                v = float(val)
-                if not math.isnan(v):
-                    return v
-            except (TypeError, ValueError):
+VND_API = "https://finfo-api.vndirect.com.vn/v4"
+VND_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json",
+    "Referer": "https://dstock.vndirect.com.vn/",
+    "Origin": "https://dstock.vndirect.com.vn",
+}
+
+
+def _vn_prices_vndirect(sym):
+    r = requests.get(
+        f"{VND_API}/stock_prices",
+        params={"sort": "date", "size": 150, "page": 1, "q": f"code:{sym}"},
+        headers=VND_HEADERS,
+        timeout=15,
+    )
+    r.raise_for_status()
+    rows = []
+    for d in r.json().get("data", []):
+        close = d.get("close") or d.get("adClose")
+        if not close:
+            continue
+        rows.append(
+            {
+                "date": str(d["date"])[:10],
+                "close": float(close),
+                "high": float(d.get("high") or close),
+                "low": float(d.get("low") or close),
+                "volume": float(d.get("nmVolume") or d.get("volume") or 0),
+            }
+        )
+    rows.sort(key=lambda x: x["date"])
+    return rows
+
+
+def _vn_prices_vci(sym):
+    payload = {
+        "timeFrame": "ONE_DAY",
+        "symbols": [sym],
+        "to": int(time.time()) + 86400,
+        "countBack": 150,
+    }
+    headers = dict(VND_HEADERS)
+    headers["Referer"] = "https://trading.vietcap.com.vn/"
+    headers["Origin"] = "https://trading.vietcap.com.vn"
+    r = requests.post(
+        "https://trading.vietcap.com.vn/api/chart/OHLCChart/gap",
+        json=payload,
+        headers=headers,
+        timeout=15,
+    )
+    r.raise_for_status()
+    d = r.json()[0]
+    rows = []
+    for t, o, h, l, c, v in zip(d["t"], d["o"], d["h"], d["l"], d["c"], d["v"]):
+        rows.append(
+            {
+                "date": datetime.fromtimestamp(int(t)).strftime("%Y-%m-%d"),
+                "close": float(c),
+                "high": float(h),
+                "low": float(l),
+                "volume": float(v),
+            }
+        )
+    rows.sort(key=lambda x: x["date"])
+    return rows
+
+
+def _vn_fundamentals(sym, price):
+    """Lấy P/E, EPS, cổ tức, vốn hóa từ VNDirect (khớp theo tên chỉ số)."""
+    out = {"pe": None, "eps": None, "dividend_yield": None, "market_cap": None}
+    try:
+        r = requests.get(
+            f"{VND_API}/ratios/latest",
+            params={"order": "reportDate", "where": f"code:{sym}", "size": 300},
+            headers=VND_HEADERS,
+            timeout=15,
+        )
+        r.raise_for_status()
+        for it in r.json().get("data", []):
+            name = f"{it.get('itemName', '')} {it.get('itemVnName', '')}".lower()
+            val = it.get("value")
+            if not isinstance(val, (int, float)):
                 continue
-    return None
+            if out["pe"] is None and ("p/e" in name or "price to earning" in name) and "diluted" not in name:
+                out["pe"] = float(val)
+            elif out["eps"] is None and "eps" in name and "growth" not in name and "tăng" not in name:
+                out["eps"] = float(val)
+            elif out["dividend_yield"] is None and ("dividend yield" in name or "tỷ suất cổ tức" in name):
+                out["dividend_yield"] = float(val)
+            elif out["market_cap"] is None and ("market cap" in name or "vốn hóa" in name):
+                out["market_cap"] = float(val)
+        if out["market_cap"] is not None and out["market_cap"] < 1e10:
+            out["market_cap"] *= 1e9  # nguồn trả theo đơn vị tỷ đồng
+        if out["pe"] is None and out["eps"]:
+            out["pe"] = price / out["eps"]
+    except Exception:
+        pass
+    return out
 
 
 def fetch_vn(sym):
-    from vnstock import Vnstock
-
-    end = datetime.now()
-    start = end - timedelta(days=150)
-    stock = Vnstock().stock(symbol=sym, source="VCI")
-    df = stock.quote.history(
-        start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d"), interval="1D"
-    )
-    if df is None or df.empty:
-        raise HTTPException(404, f"Không tìm thấy dữ liệu giá cho mã {sym}")
-    df = df.rename(columns=str.lower).sort_values("time").reset_index(drop=True)
-    # vnstock trả giá theo đơn vị nghìn đồng
-    factor = 1000 if float(df["close"].max()) < 1000 else 1
-    rows = [
-        {
-            "date": pd.to_datetime(r["time"]).strftime("%Y-%m-%d"),
-            "close": float(r["close"]) * factor,
-            "high": float(r["high"]) * factor,
-            "low": float(r["low"]) * factor,
-            "volume": float(r["volume"]),
-        }
-        for _, r in df.iterrows()
-    ]
-    price = rows[-1]["close"]
-
-    fund = {"pe": None, "eps": None, "dividend_yield": None, "market_cap": None}
-    name = sym
-    try:
-        ov = stock.company.overview()
-        if ov is not None and not ov.empty:
-            ovr = ov.iloc[0]
-            shares = _pick(ovr, ["issue_share", "outstanding"])
-            if shares:
-                fund["market_cap"] = shares * price
-    except Exception:
-        pass
-    try:
-        ratio = stock.finance.ratio(period="year", lang="en", dropna=True)
-        if ratio is not None and not ratio.empty:
-            if isinstance(ratio.columns, pd.MultiIndex):
-                ratio.columns = [" ".join(str(x) for x in c).strip() for c in ratio.columns]
-            ycol = next((c for c in ratio.columns if "year" in str(c).lower()), None)
-            if ycol is not None:
-                ratio = ratio.sort_values(ycol, ascending=False)
-            r0 = ratio.iloc[0]
-            fund["pe"] = _pick(r0, ["p/e", "pe"], exclude=["peg"])
-            fund["eps"] = _pick(r0, ["eps"], exclude=["growth", "yoy"])
-            fund["dividend_yield"] = _pick(r0, ["dividend"])
-            if fund["pe"] is None and fund["eps"]:
-                fund["pe"] = price / fund["eps"]
-    except Exception:
-        pass
-    return {"rows": rows, "fund": fund, "name": name, "currency": "VND"}
+    rows = []
+    for getter in (_vn_prices_vndirect, _vn_prices_vci):
+        try:
+            rows = getter(sym)
+            if rows:
+                break
+        except Exception:
+            continue
+    if not rows:
+        raise HTTPException(404, f"Không lấy được dữ liệu giá cho mã {sym}. Kiểm tra lại mã hoặc thử lại sau.")
+    # Một số nguồn trả giá theo đơn vị nghìn đồng
+    if max(r["close"] for r in rows) < 1000:
+        for r in rows:
+            for k in ("close", "high", "low"):
+                r[k] *= 1000
+    fund = _vn_fundamentals(sym, rows[-1]["close"])
+    return {"rows": rows, "fund": fund, "name": sym, "currency": "VND"}
 
 
 def fetch_us(sym):

@@ -3,6 +3,5 @@ uvicorn[standard]>=0.29
 pandas>=2.0
 requests>=2.31
 python-dotenv>=1.0
-vnstock>=3.2
 yfinance>=0.2.40
 anthropic>=0.40
